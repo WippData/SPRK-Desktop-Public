@@ -1,7 +1,7 @@
 # SPRK-Desktop-Public
 
 
-SPRK Desktop (c) 2025 SPRK Systems LLC. All rights reserved.
+SPRK Desktop (c) 2025 SPRK Systems. All rights reserved.
 
 This public repository is used only to distribute compiled executables 
 and update metadata for the SPRK Desktop application.
