@@ -11,3 +11,5 @@ you may not modify, redistribute, or reverse-engineer them without
 explicit written permission.
 
 This software is provided "as is" without warranty of any kind.
+
+For more information, go to https://sprksystems.com
