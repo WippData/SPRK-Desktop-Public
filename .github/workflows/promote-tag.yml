@@ -1,0 +1,75 @@
+name: Promote tag (channel pointer)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: "Existing immutable version tag, e.g. v0.3.7"
+        required: true
+        type: string
+      channel_tag:
+        description: "Moving tag to set, e.g. channel-early | channel-paid | channel-free"
+        required: true
+        type: string
+      force_move:
+        description: "Allow moving an existing channel tag"
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git author
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+      - name: Fetch tags
+        run: |
+          git fetch --force --tags
+
+      - name: Resolve version tag to commit SHA
+        run: |
+          set -euo pipefail
+          VERSION_TAG="${{ inputs.version_tag }}"
+          if ! git rev-parse -q --verify "refs/tags/${VERSION_TAG}" >/dev/null; then
+            echo "Version tag not found: ${VERSION_TAG}"
+            exit 1
+          fi
+          SHA="$(git rev-list -n 1 "${VERSION_TAG}")"
+          echo "Resolved ${VERSION_TAG} -> ${SHA}"
+          echo "SHA=${SHA}" >> $GITHUB_ENV
+
+      - name: Create/move channel tag
+        run: |
+          set -euo pipefail
+          CHANNEL_TAG="${{ inputs.channel_tag }}"
+          FORCE="${{ inputs.force_move }}"
+
+          if git rev-parse -q --verify "refs/tags/${CHANNEL_TAG}" >/dev/null; then
+            echo "Channel tag exists: ${CHANNEL_TAG}"
+            if [ "${FORCE}" != "true" ]; then
+              echo "force_move=false, refusing to move existing tag."
+              exit 1
+            fi
+            git tag -f "${CHANNEL_TAG}" "${SHA}"
+            git push -f origin "refs/tags/${CHANNEL_TAG}"
+          else
+            git tag "${CHANNEL_TAG}" "${SHA}"
+            git push origin "refs/tags/${CHANNEL_TAG}"
+          fi
+
+      - name: Show result
+        run: |
+          git show -s --oneline "${SHA}"
+          echo "Channel tag '${{ inputs.channel_tag }}' now points to '${{ inputs.version_tag }}'"
