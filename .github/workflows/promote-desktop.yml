@@ -80,20 +80,14 @@ jobs:
           fi
 
           note_file="$CANDIDATE_DIR/release-notes.md"
-          {
-            echo "Promoted desktop release for \
-`${{ inputs.electron_release_tag }}`."
-            echo
-            echo "Source refs:"
-            echo "- ElectronForge commit: \
-`${electron_commit}`"
-            echo "- Frontend tag: \
-`${frontend_tag}` (
-`${frontend_commit}`)"
-            echo "- Backend tag: \
-`${backend_tag}` (
-`${backend_commit}`)"
-          } > "$note_file"
+          cat > "$note_file" <<EOF
+Promoted desktop release for `${{ inputs.electron_release_tag }}`.
+
+Source refs:
+- ElectronForge commit: `${electron_commit}`
+- Frontend tag: `${frontend_tag}` (`${frontend_commit}`)
+- Backend tag: `${backend_tag}` (`${backend_commit}`)
+EOF
 
           {
             echo "frontend_tag=$frontend_tag"
@@ -119,6 +113,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          NOTE_FILE: ${{ steps.manifest.outputs.note_file }}
         run: |
           set -euo pipefail
 
@@ -132,6 +127,8 @@ jobs:
             make_latest="true"
           fi
 
+          body="$(<"$NOTE_FILE")"
+
           if [[ -n "$release_id" ]]; then
             gh api \
               --method PATCH \
@@ -141,7 +138,7 @@ jobs:
               -F draft=false \
               -F prerelease=false \
               -f make_latest="$make_latest" \
-              -F body=@"${{ steps.manifest.outputs.note_file }}" >/dev/null
+              -f body="$body" >/dev/null
           else
             gh api \
               --method POST \
@@ -152,7 +149,7 @@ jobs:
               -F prerelease=false \
               -f make_latest="$make_latest" \
               -F target_commitish="${GITHUB_SHA}" \
-              -F body=@"${{ steps.manifest.outputs.note_file }}" >/dev/null
+              -f body="$body" >/dev/null
           fi
 
       - name: Upload Public Release Assets
