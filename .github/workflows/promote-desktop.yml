@@ -1,0 +1,188 @@
+name: Promote Desktop Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      electron_release_tag:
+        description: ElectronForge candidate release tag to promote
+        required: true
+        type: string
+      promote_latest:
+        description: Publish this release as the latest public desktop version
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_REPOSITORY: WippData/SPRK_ElectronForge
+      CONTAINER_REPOSITORY: WippData/SPRK_Container
+      CANDIDATE_DIR: candidate-release
+
+    steps:
+      - name: Generate ElectronForge Read Token
+        id: generate-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_ASSET_DOWNLOADER_APP_ID }}
+          private-key: ${{ secrets.RELEASE_ASSET_DOWNLOADER_APP_PRIVATE_KEY }}
+          owner: WippData
+          repositories: SPRK_ElectronForge
+
+      - name: Download Candidate Manifest
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$CANDIDATE_DIR"
+          gh release download "${{ inputs.electron_release_tag }}" \
+            --repo "$ELECTRON_REPOSITORY" \
+            --pattern "release-manifest.json" \
+            --dir "$CANDIDATE_DIR"
+
+      - name: Select Public Assets
+        id: manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_path="$CANDIDATE_DIR/release-manifest.json"
+          if [[ ! -f "$manifest_path" ]]; then
+            echo "release-manifest.json was not downloaded" >&2
+            exit 1
+          fi
+
+          frontend_tag="$(jq -r '.frontend_tag' "$manifest_path")"
+          backend_tag="$(jq -r '.backend_tag' "$manifest_path")"
+          frontend_commit="$(jq -r '.frontend_commit' "$manifest_path")"
+          backend_commit="$(jq -r '.backend_commit' "$manifest_path")"
+          electron_commit="$(jq -r '.electron_commit' "$manifest_path")"
+
+          if [[ -z "$frontend_tag" || "$frontend_tag" == "null" ]]; then
+            echo "Manifest is missing frontend_tag" >&2
+            exit 1
+          fi
+          if [[ -z "$backend_tag" || "$backend_tag" == "null" ]]; then
+            echo "Manifest is missing backend_tag" >&2
+            exit 1
+          fi
+
+          jq -r '.artifacts[] | select(.filename == "latest.yml" or .filename == "latest-mac.yml" or (.filename | test("\\.(exe|dmg|zip)$"; "i"))) | .filename' "$manifest_path" | sort -u > "$CANDIDATE_DIR/public-assets.txt"
+
+          if [[ ! -s "$CANDIDATE_DIR/public-assets.txt" ]]; then
+            echo "No public assets were selected from release-manifest.json" >&2
+            exit 1
+          fi
+
+          note_file="$CANDIDATE_DIR/release-notes.md"
+          {
+            echo "Promoted desktop release for \
+`${{ inputs.electron_release_tag }}`."
+            echo
+            echo "Source refs:"
+            echo "- ElectronForge commit: \
+`${electron_commit}`"
+            echo "- Frontend tag: \
+`${frontend_tag}` (
+`${frontend_commit}`)"
+            echo "- Backend tag: \
+`${backend_tag}` (
+`${backend_commit}`)"
+          } > "$note_file"
+
+          {
+            echo "frontend_tag=$frontend_tag"
+            echo "backend_tag=$backend_tag"
+            echo "note_file=$note_file"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download Public Candidate Assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r asset_name; do
+            [[ -z "$asset_name" ]] && continue
+            gh release download "${{ inputs.electron_release_tag }}" \
+              --repo "$ELECTRON_REPOSITORY" \
+              --pattern "$asset_name" \
+              --dir "$CANDIDATE_DIR"
+          done < "$CANDIDATE_DIR/public-assets.txt"
+
+      - name: Create Or Update Public Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          release_id=""
+          if release_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${{ inputs.electron_release_tag }}" 2>/dev/null)"; then
+            release_id="$(jq -r '.id' <<<"$release_json")"
+          fi
+
+          make_latest="false"
+          if [[ "${{ inputs.promote_latest }}" == "true" ]]; then
+            make_latest="true"
+          fi
+
+          if [[ -n "$release_id" ]]; then
+            gh api \
+              --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/releases/${release_id}" \
+              -f tag_name="${{ inputs.electron_release_tag }}" \
+              -f name="${{ inputs.electron_release_tag }}" \
+              -F draft=false \
+              -F prerelease=false \
+              -f make_latest="$make_latest" \
+              --input "${{ steps.manifest.outputs.note_file }}" >/dev/null
+          else
+            gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/releases" \
+              -f tag_name="${{ inputs.electron_release_tag }}" \
+              -f name="${{ inputs.electron_release_tag }}" \
+              -F draft=false \
+              -F prerelease=false \
+              -f make_latest="$make_latest" \
+              -F target_commitish="${GITHUB_SHA}" \
+              --input "${{ steps.manifest.outputs.note_file }}" >/dev/null
+          fi
+
+      - name: Upload Public Release Assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(
+            find "$CANDIDATE_DIR" -maxdepth 1 -type f \
+              \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name 'latest.yml' -o -name 'latest-mac.yml' -o -name 'release-manifest.json' \) \
+              | sort
+          )
+
+          if [[ "${#files[@]}" -eq 0 ]]; then
+            echo "No public release assets found in $CANDIDATE_DIR" >&2
+            exit 1
+          fi
+
+          gh release upload "${{ inputs.electron_release_tag }}" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Trigger Container Promotion
+        uses: peter-evans/workflow-dispatch@v3
+        with:
+          token: ${{ secrets.SPRK_CONTAINER_WORKFLOW_TOKEN }}
+          repository: ${{ env.CONTAINER_REPOSITORY }}
+          workflow: publish-container.yml
+          ref: main
+          inputs: |
+            frontend_ref: ${{ steps.manifest.outputs.frontend_tag }}
+            backend_ref: ${{ steps.manifest.outputs.backend_tag }}
+            image_tag: ${{ inputs.electron_release_tag }}
+            promote_latest: ${{ inputs.promote_latest }}
