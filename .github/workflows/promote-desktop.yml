@@ -141,7 +141,7 @@ jobs:
               -F draft=false \
               -F prerelease=false \
               -f make_latest="$make_latest" \
-              --input "${{ steps.manifest.outputs.note_file }}" >/dev/null
+              -F body=@"${{ steps.manifest.outputs.note_file }}" >/dev/null
           else
             gh api \
               --method POST \
@@ -152,7 +152,7 @@ jobs:
               -F prerelease=false \
               -f make_latest="$make_latest" \
               -F target_commitish="${GITHUB_SHA}" \
-              --input "${{ steps.manifest.outputs.note_file }}" >/dev/null
+              -F body=@"${{ steps.manifest.outputs.note_file }}" >/dev/null
           fi
 
       - name: Upload Public Release Assets
