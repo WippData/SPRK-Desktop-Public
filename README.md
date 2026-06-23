@@ -13,3 +13,4 @@ explicit written permission.
 This software is provided "as is" without warranty of any kind.
 
 For more information, go to https://sprksystems.com
+For support, visit us on Discored: https://discord.gg/ZjZn97y6
